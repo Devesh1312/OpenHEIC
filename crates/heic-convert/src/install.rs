@@ -14,6 +14,8 @@ const EXE_NAME: &str = "heic-convert.exe";
 const MENU_KEY: &str = "HeicToJpeg";
 const UNINSTALL_KEY: &str = r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\OpenHEIC";
 const EXTENSIONS: [&str; 3] = [".heic", ".heif", ".hif"];
+/// Exit code used when the UAC prompt is declined (= ERROR_CANCELLED).
+const UAC_CANCELLED: i32 = 1223;
 
 fn app_dir() -> PathBuf {
     let pf = std::env::var_os("ProgramW6432")
@@ -32,8 +34,11 @@ fn is_elevated() -> bool {
 fn relaunch_elevated(arg: &str) -> Result<()> {
     let exe = std::env::current_exe()?;
     println!("Administrator rights are required; requesting elevation...");
+    // A declined UAC prompt is a non-terminating error in PowerShell; without
+    // -ErrorAction Stop the script would go on to `exit $null` = success.
     let ps = format!(
-        "$p = Start-Process -FilePath '{}' -ArgumentList '{} --elevated' -Verb RunAs -Wait -PassThru; exit $p.ExitCode",
+        "try {{ $p = Start-Process -FilePath '{}' -ArgumentList '{} --elevated' -Verb RunAs -Wait -PassThru -ErrorAction Stop }} \
+         catch {{ exit {UAC_CANCELLED} }}; if ($null -eq $p) {{ exit 1 }}; exit $p.ExitCode",
         exe.display().to_string().replace('\'', "''"),
         arg
     );
@@ -41,8 +46,11 @@ fn relaunch_elevated(arg: &str) -> Result<()> {
         .args(["-NoProfile", "-NonInteractive", "-Command", &ps])
         .status()
         .context("failed to start elevated process")?;
+    if status.code() == Some(UAC_CANCELLED) {
+        bail!("{arg} cancelled: administrator permission was not granted (UAC prompt declined)");
+    }
     if !status.success() {
-        bail!("elevated {arg} failed or was cancelled (exit code {:?})", status.code());
+        bail!("elevated {arg} failed (exit code {:?})", status.code());
     }
     println!("{arg} completed.");
     Ok(())
