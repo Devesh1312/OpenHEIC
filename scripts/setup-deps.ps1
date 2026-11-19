@@ -27,6 +27,14 @@ if (-not (Test-Path (Join-Path $vcpkg 'vcpkg.exe'))) {
 }
 
 # Decoders only: libde265 (HEVC) + dav1d (AV1). No x265 encoder (GPL, not needed).
-& (Join-Path $vcpkg 'vcpkg.exe') install "libheif[core,libde265,dav1d]:$Triplet" --recurse --clean-after-build
-if ($LASTEXITCODE -ne 0) { throw 'vcpkg install failed' }
+# Retried: vcpkg downloads sources/patches from GitHub, which occasionally
+# answers 503; already-built packages are kept between attempts.
+$attempts = 3
+for ($i = 1; $i -le $attempts; $i++) {
+    & (Join-Path $vcpkg 'vcpkg.exe') install "libheif[core,libde265,dav1d]:$Triplet" --recurse --clean-after-build
+    if ($LASTEXITCODE -eq 0) { break }
+    if ($i -eq $attempts) { throw "vcpkg install failed after $attempts attempts" }
+    Write-Warning "vcpkg install failed (attempt $i of $attempts); retrying in 30 s..."
+    Start-Sleep -Seconds 30
+}
 Write-Host 'Dependencies ready. Build with: cargo build --release'
