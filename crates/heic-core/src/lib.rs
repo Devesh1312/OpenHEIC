@@ -31,6 +31,8 @@ pub enum Error {
     TooLarge(u32, u32),
     #[error("decoded image has no interleaved pixel plane")]
     NoPixels,
+    #[error("image index {0} out of range (file has {1} images)")]
+    NoSuchImage(usize, usize),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -93,9 +95,31 @@ pub fn decode_file(path: impl AsRef<Path>, opts: DecodeOptions) -> Result<Decode
 
 /// Decodes the primary image of an in-memory HEIC/HEIF file.
 pub fn decode_bytes(bytes: &[u8], opts: DecodeOptions) -> Result<DecodedImage> {
+    decode_bytes_at(bytes, 0, opts)
+}
+
+/// Top-level image ids with the primary image first, then the others in file order.
+fn ordered_image_ids(ctx: &HeifContext) -> Result<Vec<libheif_rs::ItemId>> {
+    let primary = ctx.primary_image_handle()?.item_id();
+    let mut ids = vec![primary];
+    ids.extend(ctx.image_ids().into_iter().filter(|&id| id != primary));
+    Ok(ids)
+}
+
+/// Number of top-level images (1 for normal photos; more for bursts/collections).
+pub fn image_count(bytes: &[u8]) -> Result<usize> {
+    let _lib = LibHeif::new();
+    let ctx = HeifContext::read_from_bytes(bytes)?;
+    Ok(ordered_image_ids(&ctx)?.len())
+}
+
+/// Decodes top-level image `index` (0 = primary image, see [`image_count`]).
+pub fn decode_bytes_at(bytes: &[u8], index: usize, opts: DecodeOptions) -> Result<DecodedImage> {
     let lib = LibHeif::new();
     let ctx = HeifContext::read_from_bytes(bytes)?;
-    let handle = ctx.primary_image_handle()?;
+    let ids = ordered_image_ids(&ctx)?;
+    let id = *ids.get(index).ok_or(Error::NoSuchImage(index, ids.len()))?;
+    let handle = ctx.image_handle(id)?;
     decode_handle(&lib, &handle, opts)
 }
 
@@ -127,7 +151,7 @@ pub fn looks_like_heif(head: &[u8]) -> bool {
     }
     matches!(
         &head[8..12],
-        b"heic" | b"heix" | b"heim" | b"heis" | b"hevc" | b"hevx" | b"mif1" | b"msf1" | b"heif"
+        b"heic" | b"heix" | b"heim" | b"heis" | b"hevc" | b"hevx" | b"mif1" | b"msf1" | b"heif" | b"avif" | b"avis"
     )
 }
 
@@ -269,9 +293,14 @@ pub fn encode_jpeg<W: Write>(img: &DecodedImage, out: W, opts: JpegOptions) -> R
 /// Convenience: decode a HEIC file and write it as a JPEG file.
 pub fn convert_file(src: &Path, dst: &Path, opts: JpegOptions) -> Result<()> {
     let img = decode_file(src, DecodeOptions { keep_alpha: false, skip_metadata: !opts.keep_metadata })?;
+    write_jpeg_file(&img, dst, opts)
+}
+
+/// Encodes `img` and writes it to `dst`.
+pub fn write_jpeg_file(img: &DecodedImage, dst: &Path, opts: JpegOptions) -> Result<()> {
     let f = std::fs::File::create(dst)?;
     let mut w = std::io::BufWriter::with_capacity(1 << 20, f);
-    encode_jpeg(&img, &mut w, opts)?;
+    encode_jpeg(img, &mut w, opts)?;
     w.flush()?;
     Ok(())
 }

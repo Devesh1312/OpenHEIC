@@ -21,7 +21,10 @@ const PROPERTY_HANDLERS: &str = r"SOFTWARE\Microsoft\Windows\CurrentVersion\Prop
 const PREVIOUS_HANDLER: &str = "OpenHEICPrevious";
 const EXTENSIONS: [&str; 3] = [".heic", ".heif", ".hif"];
 /// Brands accepted at offset 8 after "ftyp" at offset 4.
-const BRANDS: [&[u8; 4]; 8] = [b"heic", b"heix", b"heim", b"heis", b"hevc", b"hevx", b"mif1", b"msf1"];
+/// avif/avis: AV1-coded HEIF (the .avif extension itself is not registered, so
+/// Windows' own AV1 codec keeps .avif files when installed).
+const BRANDS: [&[u8; 4]; 10] =
+    [b"heic", b"heix", b"heim", b"heis", b"hevc", b"hevx", b"mif1", b"msf1", b"avif", b"avis"];
 /// Explorer's built-in WIC-based thumbnail provider and the thumbnail ShellEx slot.
 const THUMB_SHELLEX: &str = "{e357fccd-a995-4576-b01f-234630154e96}";
 const WIC_THUMBNAIL_PROVIDER: &str = "{C7657C4A-9F68-40fa-A4DF-96BC08EB3551}";
@@ -79,7 +82,8 @@ fn register_inner(dll: &str) -> std::io::Result<()> {
     k.set_value("ContainerFormat", &g(&GUID_ContainerFormatHeif))?;
     k.set_value("MimeTypes", &"image/heic,image/heif")?;
     k.set_value("FileExtensions", &EXTENSIONS.join(","))?;
-    for v in ["SupportAnimation", "SupportChromakey", "SupportLossless", "SupportMultiframe"] {
+    k.set_value("SupportMultiframe", &1u32)?;
+    for v in ["SupportAnimation", "SupportChromakey", "SupportLossless"] {
         k.set_value(v, &0u32)?;
     }
     let (inproc, _) = k.create_subkey("InprocServer32")?;

@@ -102,6 +102,25 @@ fn main() -> windows_core::Result<()> {
         println!("max pixel difference vs heic-core = {max_diff}");
         assert_eq!(max_diff, 0, "WIC pixels differ from reference decode");
 
+        // Every further frame (bursts/collections) must match heic-core's decode of that image.
+        let bytes = std::fs::read(file).unwrap();
+        let count = decoder.GetFrameCount()?;
+        assert_eq!(count as usize, heic_core::image_count(&bytes).unwrap(), "frame count");
+        for i in 1..count {
+            let f = decoder.GetFrame(i)?;
+            let (mut fw, mut fh) = (0, 0);
+            f.GetSize(&mut fw, &mut fh)?;
+            let conv = WICConvertBitmapSource(&GUID_WICPixelFormat32bppBGRA, &f)?;
+            let mut px = vec![0u8; (fw * fh * 4) as usize];
+            conv.CopyPixels(std::ptr::null(), fw * 4, &mut px)?;
+            let r = heic_core::decode_bytes_at(&bytes, i as usize, heic_core::DecodeOptions::default()).unwrap();
+            assert_eq!((r.width, r.height), (fw, fh), "frame {i} size");
+            let same = px.chunks_exact(4).zip(r.pixels.chunks_exact(3)).all(|(b, c)| b[2] == c[0] && b[1] == c[1] && b[0] == c[2]);
+            assert!(same, "frame {i} pixels differ");
+            println!("frame {i}: {fw}x{fh} OK");
+        }
+        assert!(decoder.GetFrame(count).is_err(), "out-of-range frame must fail");
+
         if let Some(out) = args.get(3) {
             write_png(&factory, &conv, out)?;
             println!("wrote {out}");

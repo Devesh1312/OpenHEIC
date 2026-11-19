@@ -57,6 +57,10 @@ struct ConvertArgs {
     /// Do not scan sub-folders of folder arguments.
     #[arg(long)]
     no_recursive: bool,
+    /// Also convert the extra images in multi-image HEICs (bursts, collections)
+    /// to NAME-2.jpg, NAME-3.jpg, ... (default: only the main image -> NAME.jpg).
+    #[arg(long)]
+    all_images: bool,
     /// Wait for Enter before exiting (used by the Explorer context menu).
     #[arg(long, hide = true)]
     pause: bool,
@@ -94,10 +98,30 @@ fn is_heic_ext(p: &Path) -> bool {
         .is_some_and(|e| ["heic", "heif", "hif"].iter().any(|x| e.eq_ignore_ascii_case(x)))
 }
 
-/// A source file and the root it was found under (for mirroring with --out).
+/// A source file, the root it was found under (for mirroring with --out),
+/// and the JPEG path for its main image.
 struct Job {
     src: PathBuf,
     rel: PathBuf,
+    first: PathBuf,
+}
+
+/// Sets each job's output path. When two sources would write the same JPEG
+/// (e.g. IMG_1.heic and IMG_1.heif in one folder), the later one is named
+/// IMG_1-heif.jpg instead. Jobs are sorted first, so re-runs choose the same names.
+fn assign_outputs(jobs: &mut [Job], out: Option<&Path>) {
+    jobs.sort_by(|a, b| a.src.cmp(&b.src));
+    let mut taken = std::collections::HashSet::new();
+    for job in jobs.iter_mut() {
+        let mut first = output_path(job, out);
+        if !taken.insert(first.to_string_lossy().to_lowercase()) {
+            let stem = job.src.file_stem().unwrap_or_default().to_string_lossy();
+            let ext = job.src.extension().unwrap_or_default().to_string_lossy().to_lowercase();
+            first = first.with_file_name(format!("{stem}-{ext}.jpg"));
+            taken.insert(first.to_string_lossy().to_lowercase());
+        }
+        job.first = first;
+    }
 }
 
 fn collect(args: &ConvertArgs) -> Result<Vec<Job>> {
@@ -121,14 +145,14 @@ fn collect(args: &ConvertArgs) -> Result<Vec<Job>> {
                     let src = entry.path().to_path_buf();
                     let rel = src.strip_prefix(p).unwrap_or(&src).to_path_buf();
                     if seen.insert(canonical(&src)) {
-                        jobs.push(Job { src, rel });
+                        jobs.push(Job { src, rel, first: PathBuf::new() });
                     }
                 }
             }
         } else {
             let rel = PathBuf::from(p.file_name().context("invalid file name")?);
             if seen.insert(canonical(p)) {
-                jobs.push(Job { src: p.clone(), rel });
+                jobs.push(Job { src: p.clone(), rel, first: PathBuf::new() });
             }
         }
     }
@@ -146,35 +170,70 @@ fn output_path(job: &Job, out: Option<&Path>) -> PathBuf {
     }
 }
 
-enum Outcome {
-    Converted,
-    Skipped,
+/// Output name for image `index` of a file: NAME.jpg, then NAME-2.jpg, NAME-3.jpg...
+fn indexed_path(first: &Path, index: usize) -> PathBuf {
+    if index == 0 {
+        return first.to_path_buf();
+    }
+    let stem = first.file_stem().unwrap_or_default().to_string_lossy();
+    first.with_file_name(format!("{stem}-{}.jpg", index + 1))
+}
+
+#[derive(Default)]
+struct Outcome {
+    /// JPEGs written.
+    converted: usize,
+    /// JPEGs not written because they already existed.
+    skipped: usize,
+    /// Extra images in the file that were not converted (no --all-images).
+    extra_images: usize,
 }
 
 fn convert_one(job: &Job, args: &ConvertArgs) -> Result<Outcome> {
-    let dst = output_path(job, args.out.as_deref());
-    if dst.exists() && !args.overwrite {
-        return Ok(Outcome::Skipped);
+    let first = job.first.clone();
+    let mut outcome = Outcome::default();
+    // Fast path: nothing to do, and no need to read the file.
+    if !args.all_images && first.exists() && !args.overwrite {
+        outcome.skipped = 1;
+        return Ok(outcome);
     }
-    if let Some(parent) = dst.parent() {
+    let bytes = std::fs::read(&job.src)?;
+    let count = heic_core::image_count(&bytes)?;
+    let wanted = if args.all_images { count } else { 1 };
+    if !args.all_images {
+        outcome.extra_images = count.saturating_sub(1);
+    }
+    if let Some(parent) = first.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let tmp = dst.with_extension("jpg.part");
-    let opts = heic_core::JpegOptions { quality: args.quality, keep_metadata: !args.strip_metadata };
-    let result = heic_core::convert_file(&job.src, &tmp, opts)
-        .map_err(anyhow::Error::from)
-        .and_then(|_| {
-            copy_times(&job.src, &tmp)?;
-            if dst.exists() {
-                std::fs::remove_file(&dst)?;
-            }
-            std::fs::rename(&tmp, &dst)?;
-            Ok(())
-        });
-    if result.is_err() {
-        let _ = std::fs::remove_file(&tmp);
+    let decode_opts = heic_core::DecodeOptions { keep_alpha: false, skip_metadata: args.strip_metadata };
+    let jpeg_opts = heic_core::JpegOptions { quality: args.quality, keep_metadata: !args.strip_metadata };
+
+    for index in 0..wanted {
+        let dst = indexed_path(&first, index);
+        if dst.exists() && !args.overwrite {
+            outcome.skipped += 1;
+            continue;
+        }
+        let tmp = dst.with_extension("jpg.part");
+        let result = heic_core::decode_bytes_at(&bytes, index, decode_opts)
+            .and_then(|img| heic_core::write_jpeg_file(&img, &tmp, jpeg_opts))
+            .map_err(anyhow::Error::from)
+            .and_then(|_| {
+                copy_times(&job.src, &tmp)?;
+                if dst.exists() {
+                    std::fs::remove_file(&dst)?;
+                }
+                std::fs::rename(&tmp, &dst)?;
+                Ok(())
+            });
+        if let Err(e) = result {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(e.context(format!("image {} of {count}", index + 1)));
+        }
+        outcome.converted += 1;
     }
-    result.map(|_| Outcome::Converted)
+    Ok(outcome)
 }
 
 fn copy_times(src: &Path, dst: &Path) -> Result<()> {
@@ -192,7 +251,8 @@ fn convert(args: ConvertArgs) -> Result<i32> {
     if let Some(n) = args.jobs {
         rayon::ThreadPoolBuilder::new().num_threads(n.max(1)).build_global()?;
     }
-    let jobs = collect(&args)?;
+    let mut jobs = collect(&args)?;
+    assign_outputs(&mut jobs, args.out.as_deref());
     if jobs.is_empty() {
         bail!("no HEIC/HEIF files found");
     }
@@ -208,19 +268,28 @@ fn convert(args: ConvertArgs) -> Result<i32> {
     let failures = Mutex::new(Vec::new());
     let converted = AtomicUsize::new(0);
     let skipped = AtomicUsize::new(0);
+    let multi_files = AtomicUsize::new(0);
+    let extra_images = AtomicUsize::new(0);
 
     jobs.par_iter().for_each(|job| {
         let name = job.src.file_name().unwrap_or_default().to_string_lossy().into_owned();
         pb.set_message(name);
         match convert_one(job, &args) {
-            Ok(Outcome::Converted) => _ = converted.fetch_add(1, Ordering::Relaxed),
-            Ok(Outcome::Skipped) => _ = skipped.fetch_add(1, Ordering::Relaxed),
+            Ok(o) => {
+                converted.fetch_add(o.converted, Ordering::Relaxed);
+                skipped.fetch_add(o.skipped, Ordering::Relaxed);
+                if o.extra_images > 0 {
+                    multi_files.fetch_add(1, Ordering::Relaxed);
+                    extra_images.fetch_add(o.extra_images, Ordering::Relaxed);
+                }
+            }
             Err(e) => failures.lock().unwrap().push((job.src.clone(), e)),
         }
         pb.inc(1);
     });
     pb.finish_and_clear();
     let (converted, skipped) = (converted.into_inner(), skipped.into_inner());
+    let (multi_files, extra_images) = (multi_files.into_inner(), extra_images.into_inner());
 
     let failures = failures.into_inner().unwrap();
     for (p, e) in &failures {
@@ -232,5 +301,38 @@ fn convert(args: ConvertArgs) -> Result<i32> {
         if args.overwrite { "" } else { "; use --overwrite to replace" },
         failures.len()
     );
+    if multi_files > 0 {
+        println!(
+            "Note: {multi_files} file(s) contain {extra_images} extra image(s) (bursts/collections); \
+             only the main image was converted. Use --all-images to convert them all."
+        );
+    }
     Ok(if failures.is_empty() { 0 } else { 2 })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn indexed_names() {
+        let p = Path::new(r"C:\x\IMG_1.jpg");
+        assert_eq!(indexed_path(p, 0), PathBuf::from(r"C:\x\IMG_1.jpg"));
+        assert_eq!(indexed_path(p, 1), PathBuf::from(r"C:\x\IMG_1-2.jpg"));
+        assert_eq!(indexed_path(p, 9), PathBuf::from(r"C:\x\IMG_1-10.jpg"));
+    }
+}
+
+#[cfg(test)]
+mod collision_tests {
+    use super::*;
+
+    #[test]
+    fn same_stem_different_extension_gets_distinct_names() {
+        let mk = |s: &str| Job { src: PathBuf::from(s), rel: PathBuf::from(Path::new(s).file_name().unwrap()), first: PathBuf::new() };
+        let mut jobs = vec![mk(r"C:\p\IMG.heif"), mk(r"C:\p\IMG.heic"), mk(r"C:\p\other.HEIC")];
+        assign_outputs(&mut jobs, None);
+        let names: Vec<_> = jobs.iter().map(|j| j.first.file_name().unwrap().to_string_lossy().into_owned()).collect();
+        assert_eq!(names, ["IMG.jpg", "IMG-heif.jpg", "other.jpg"]);
+    }
 }

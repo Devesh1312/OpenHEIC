@@ -128,3 +128,43 @@ fn local_samples_if_present() {
         check(f, i % 8 == 0);
     }
 }
+
+fn data(name: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/data").join(name)
+}
+
+#[test]
+fn av1_heif_keeps_icc_and_exif() {
+    let img = decode_file(data("test.heif"), DecodeOptions::default()).unwrap();
+    assert!(img.icc.is_some(), "ICC profile");
+    assert!(img.exif.is_some(), "EXIF");
+}
+
+#[test]
+fn multi_image_collection() {
+    let bytes = std::fs::read(data("collection.heif")).unwrap();
+    assert_eq!(heic_core::image_count(&bytes).unwrap(), 4);
+    let info = heic_core::read_photo_info(&bytes).unwrap();
+    assert_eq!(info.image_count, 4);
+
+    let primary = heic_core::decode_bytes(&bytes, DecodeOptions::default()).unwrap();
+    let first = heic_core::decode_bytes_at(&bytes, 0, DecodeOptions::default()).unwrap();
+    assert_eq!(primary.pixels, first.pixels, "index 0 must be the primary image");
+
+    let mut distinct = std::collections::HashSet::new();
+    for i in 0..4 {
+        let img = heic_core::decode_bytes_at(&bytes, i, DecodeOptions::default()).unwrap();
+        assert!(img.width > 0 && img.height > 0);
+        distinct.insert(img.pixels);
+    }
+    assert_eq!(distinct.len(), 4, "each image should have different content");
+    assert!(heic_core::decode_bytes_at(&bytes, 4, DecodeOptions::default()).is_err());
+}
+
+#[test]
+fn single_image_files_report_one_image() {
+    for f in ["test.heic", "alpha.heif", "test_nclx.heif"] {
+        let bytes = std::fs::read(data(f)).unwrap();
+        assert_eq!(heic_core::image_count(&bytes).unwrap(), 1, "{f}");
+    }
+}

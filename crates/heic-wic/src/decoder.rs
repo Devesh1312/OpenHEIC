@@ -26,40 +26,34 @@ struct Pixels {
     icc: Option<Vec<u8>>,
 }
 
+/// The file's bytes plus one lazily decoded slot per top-level image
+/// (frame 0 = primary image; bursts/collections have more).
 struct Source {
     bytes: Vec<u8>,
-    pixels: OnceLock<Result<Pixels, windows_core::HRESULT>>,
+    frames: Vec<OnceLock<Result<Pixels, windows_core::HRESULT>>>,
 }
 
 impl Source {
-    fn pixels(&self) -> windows_core::Result<&Pixels> {
-        let r = self.pixels.get_or_init(|| {
-            catch_unwind(AssertUnwindSafe(|| decode(&self.bytes)))
-                .unwrap_or(Err(E_UNEXPECTED))
+    fn pixels(&self, index: usize) -> windows_core::Result<&Pixels> {
+        let slot = self.frames.get(index).ok_or(windows_core::Error::from(E_INVALIDARG))?;
+        let r = slot.get_or_init(|| {
+            catch_unwind(AssertUnwindSafe(|| decode(&self.bytes, index))).unwrap_or(Err(E_UNEXPECTED))
         });
         r.as_ref().map_err(|e| (*e).into())
     }
 }
 
-fn decode(bytes: &[u8]) -> Result<Pixels, windows_core::HRESULT> {
-    let opts = heic_core::DecodeOptions { keep_alpha: true, skip_metadata: true };
-    let img = heic_core::decode_bytes(bytes, opts).map_err(|_| WINCODEC_ERR_BADIMAGE)?;
-    // ICC is cheap to read separately; EXIF is intentionally not exposed so
-    // viewers never re-apply an orientation that libheif already applied.
-    let icc = icc_for(bytes);
+fn decode(bytes: &[u8], index: usize) -> Result<Pixels, windows_core::HRESULT> {
+    // EXIF is read but never exposed through WIC, so viewers can't re-apply an
+    // orientation that libheif already applied; we only keep the ICC profile.
+    let opts = heic_core::DecodeOptions { keep_alpha: true, skip_metadata: false };
+    let img = heic_core::decode_bytes_at(bytes, index, opts).map_err(|_| WINCODEC_ERR_BADIMAGE)?;
     let mut data = img.pixels;
     let c = img.channels as usize;
     for px in data.chunks_exact_mut(c) {
         px.swap(0, 2); // RGB(A) -> BGR(A)
     }
-    Ok(Pixels { width: img.width, height: img.height, bpp: c as u32, data, icc })
-}
-
-fn icc_for(bytes: &[u8]) -> Option<Vec<u8>> {
-    let _lib = libheif_rs::LibHeif::new();
-    let ctx = libheif_rs::HeifContext::read_from_bytes(bytes).ok()?;
-    let h = ctx.primary_image_handle().ok()?;
-    heic_core::icc_profile(&h)
+    Ok(Pixels { width: img.width, height: img.height, bpp: c as u32, data, icc: img.icc })
 }
 
 pub(crate) fn read_all(stream: &IStream) -> windows_core::Result<Vec<u8>> {
@@ -136,7 +130,11 @@ impl IWICBitmapDecoder_Impl for Decoder_Impl {
         if !heic_core::looks_like_heif(&bytes) {
             return Err(WINCODEC_ERR_BADIMAGE.into());
         }
-        *guard = Some(Arc::new(Source { bytes, pixels: OnceLock::new() }));
+        let count = catch_unwind(AssertUnwindSafe(|| heic_core::image_count(&bytes)))
+            .map_err(|_| windows_core::Error::from(E_UNEXPECTED))?
+            .map_err(|_| windows_core::Error::from(WINCODEC_ERR_BADIMAGE))?;
+        let frames = (0..count.max(1)).map(|_| OnceLock::new()).collect();
+        *guard = Some(Arc::new(Source { bytes, frames }));
         Ok(())
     }
 
@@ -182,18 +180,18 @@ impl IWICBitmapDecoder_Impl for Decoder_Impl {
     }
 
     fn GetFrameCount(&self) -> windows_core::Result<u32> {
-        self.source()?;
-        Ok(1)
+        Ok(self.source()?.frames.len() as u32)
     }
 
     fn GetFrame(&self, index: u32) -> windows_core::Result<IWICBitmapFrameDecode> {
-        if index != 0 {
+        let source = self.source()?;
+        let index = index as usize;
+        if index >= source.frames.len() {
             return Err(E_INVALIDARG.into());
         }
-        let source = self.source()?;
-        source.pixels()?; // decode now so errors surface here
+        source.pixels(index)?; // decode now so errors surface here
         LIVE_OBJECTS.fetch_add(1, Ordering::SeqCst);
-        Ok(Frame { source }.into())
+        Ok(Frame { source, index }.into())
     }
 }
 
@@ -202,6 +200,7 @@ impl IWICBitmapDecoder_Impl for Decoder_Impl {
 #[implement(IWICBitmapFrameDecode)]
 struct Frame {
     source: Arc<Source>,
+    index: usize,
 }
 
 impl Drop for Frame {
@@ -215,7 +214,7 @@ impl IWICBitmapSource_Impl for Frame_Impl {
         if w.is_null() || h.is_null() {
             return Err(E_INVALIDARG.into());
         }
-        let p = self.source.pixels()?;
+        let p = self.source.pixels(self.index)?;
         unsafe {
             *w = p.width;
             *h = p.height;
@@ -224,7 +223,7 @@ impl IWICBitmapSource_Impl for Frame_Impl {
     }
 
     fn GetPixelFormat(&self) -> windows_core::Result<GUID> {
-        let p = self.source.pixels()?;
+        let p = self.source.pixels(self.index)?;
         Ok(if p.bpp == 4 { GUID_WICPixelFormat32bppBGRA } else { GUID_WICPixelFormat24bppBGR })
     }
 
@@ -253,7 +252,7 @@ impl IWICBitmapSource_Impl for Frame_Impl {
         if buf.is_null() {
             return Err(E_POINTER.into());
         }
-        let p = self.source.pixels()?;
+        let p = self.source.pixels(self.index)?;
         let full = WICRect { X: 0, Y: 0, Width: p.width as i32, Height: p.height as i32 };
         let r = if rc.is_null() { full } else { unsafe { *rc } };
         if r.X < 0
@@ -301,7 +300,7 @@ impl IWICBitmapFrameDecode_Impl for Frame_Impl {
         if actual.is_null() {
             return Err(E_INVALIDARG.into());
         }
-        let p = self.source.pixels()?;
+        let p = self.source.pixels(self.index)?;
         let Some(icc) = &p.icc else {
             unsafe { *actual = 0 };
             return Ok(());

@@ -36,7 +36,12 @@ jobs:
         run: cargo test --release --workspace
 
       - name: WIC codec in-process smoke test
-        run: target/release/examples/wic_probe.exe inproc crates/heic-core/tests/data/test.heic
+        shell: pwsh
+        run: |
+          foreach ($f in "test.heic", "collection.heif", "test_nclx.heif") {
+            target/release/examples/wic_probe.exe inproc "crates/heic-core/tests/data/$f"
+            if ($LASTEXITCODE -ne 0) { throw "wic_probe failed on $f" }
+          }
 
       - name: Property handler in-process smoke test
         run: target/release/examples/props_probe.exe inproc crates/heic-core/tests/data/test.heic

@@ -11,6 +11,8 @@ and built on [libheif](https://github.com/strukturag/libheif) + [libde265](https
 
 - **Native viewing.** A Windows Imaging Component (WIC) codec. Once installed, **Photos**, **Windows Photo Viewer**,
   **Explorer thumbnails**, Paint and any other WIC-based app open `.heic` / `.heif` / `.hif` files.
+- **Photo details in Explorer.** "Date taken", camera, lens, exposure, GPS and more appear in the *Details* pane and as
+  columns, and work for sorting, grouping and Windows Search.
 - **Converter.** Convert single files or whole folder trees to JPEG, from the command line or
   by **right-clicking** in Explorer.
 - **Self-contained.** No codecs or runtimes to install; libheif and the C runtime are linked statically.
@@ -63,6 +65,7 @@ heic-convert convert <PATH>... [options]
       --strip-metadata don't copy EXIF / XMP / ICC
   -j, --jobs <N>       parallel conversions (default: all CPU cores)
       --no-recursive   only the top level of folder arguments
+      --all-images     also convert extra images in bursts/collections (NAME-2.jpg, NAME-3.jpg, ...)
 ```
 ```powershell
 heic-convert convert D:\Photos                    # every HEIC under D:\Photos -> .jpg next to it
@@ -112,10 +115,13 @@ cargo run --release -p heic-wic --example wic_probe -- system crates\heic-core\t
 ```
 
 ## Known limitations
-- The viewer codec doesn't pass EXIF to Windows yet, so Explorer's *Details* pane shows no "Date taken" for HEIC.
-  Converted JPEGs keep all EXIF.
-- Only HEVC-coded HEIF is supported. AV1 (AVIF) inside HEIF isn't.
-- Only the primary image is decoded. Bursts, depth maps and Live Photo motion are ignored.
+- **Multi-image files** (bursts, collections): the converter writes only the main image unless you pass `--all-images`.
+  In viewers, the main image is shown first; apps that support pages (e.g. Windows Photo Viewer) can step through the rest.
+- **Live Photos:** the motion part is a separate `.MOV` file saved next to the `.HEIC`, so OpenHEIC leaves it alone.
+  The still photo converts normally.
+- Depth maps and HDR gain maps are not exported, and 10/12-bit HDR is reduced to 8-bit in JPEG.
+- `.avif` files are left to Windows (Microsoft's free *AV1 Video Extension*). AV1-coded `.heif` files are supported.
+- Metadata is read-only: editing *Rating* or *Tags* on a HEIC in Explorer is not supported.
 - The right-click entries appear under *Show more options* on Windows 11.
 - Binaries are not code-signed yet, so SmartScreen may warn on first run.
 

@@ -1,5 +1,5 @@
 # Fetches vcpkg into .deps\vcpkg (pinned commit) and builds libheif with only
-# the libde265 HEVC decoder, as static libraries with the static CRT, so that
+# the libde265 (HEVC) and dav1d (AV1) decoders, as static libraries with the static CRT, so that
 # heic_wic.dll and heic-convert.exe are fully self-contained.
 $ErrorActionPreference = 'Stop'
 
@@ -26,7 +26,7 @@ if (-not (Test-Path (Join-Path $vcpkg 'vcpkg.exe'))) {
     if ($LASTEXITCODE -ne 0) { throw 'vcpkg bootstrap failed' }
 }
 
-# Decoder only: no x265 encoder (GPL, and not needed).
-& (Join-Path $vcpkg 'vcpkg.exe') install "libheif[core,libde265]:$Triplet" --clean-after-build
+# Decoders only: libde265 (HEVC) + dav1d (AV1). No x265 encoder (GPL, not needed).
+& (Join-Path $vcpkg 'vcpkg.exe') install "libheif[core,libde265,dav1d]:$Triplet" --recurse --clean-after-build
 if ($LASTEXITCODE -ne 0) { throw 'vcpkg install failed' }
 Write-Host 'Dependencies ready. Build with: cargo build --release'

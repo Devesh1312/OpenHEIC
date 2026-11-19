@@ -11,6 +11,14 @@ the following third-party components.
 | libheif | 1.23.7 | LGPL-3.0 | https://github.com/strukturag/libheif |
 | libde265 | 1.1.3 | LGPL-3.0 | https://github.com/strukturag/libde265 |
 
+## Statically linked C libraries (permissive)
+
+| Component | Version | License | Source |
+|---|---|---|---|
+| dav1d (AV1 decoder) | 1.5.4 | BSD-2-Clause | https://code.videolan.org/videolan/dav1d |
+
+License text: [`licenses/dav1d-COPYING.txt`](licenses/dav1d-COPYING.txt).
+
 Full license texts: [`licenses/libheif-COPYING.txt`](licenses/libheif-COPYING.txt),
 [`licenses/libde265-COPYING.txt`](licenses/libde265-COPYING.txt).
 
