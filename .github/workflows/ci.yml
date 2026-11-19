@@ -28,6 +28,9 @@ jobs:
         run: ./scripts/setup-deps.ps1
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          # Native deps changed => refresh cached build-script outputs (link lists).
+          key: deps-${{ hashFiles('scripts/setup-deps.ps1') }}
 
       - name: Build
         run: cargo build --release --workspace --lib --bins --examples
