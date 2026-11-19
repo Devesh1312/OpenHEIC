@@ -30,10 +30,18 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Build
-        run: cargo build --release --workspace --examples
+        run: cargo build --release --workspace --lib --bins --examples
 
       - name: Test
         run: cargo test --release --workspace
 
       - name: WIC codec in-process smoke test
         run: target/release/examples/wic_probe.exe inproc crates/heic-core/tests/data/test.heic
+
+      - name: Release binaries exist and run
+        shell: pwsh
+        run: |
+          if (-not (Test-Path target/release/heic_wic.dll)) { throw "heic_wic.dll missing" }
+          ./target/release/heic-convert.exe --version
+          ./target/release/heic-convert.exe convert crates/heic-core/tests/data --out "$env:RUNNER_TEMP/jpg"
+          if ((Get-ChildItem "$env:RUNNER_TEMP/jpg" -Filter *.jpg).Count -lt 3) { throw "conversion produced too few JPEGs" }

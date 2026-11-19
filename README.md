@@ -15,6 +15,14 @@ and built on [libheif](https://github.com/strukturag/libheif) + [libde265](https
   by **right-clicking** in Explorer.
 - **Self-contained.** No codecs or runtimes to install; libheif and the C runtime are linked statically.
 
+### HEIC photos opening in the Windows 11 Photos app with OpenHEIC
+
+<p align="center">
+  <img src="screenshots/photos-food.jpg" alt="A HEIC photo of a plate of cake and bread open in Windows Photos" width="32%">
+  <img src="screenshots/photos-balloon.jpg" alt="A HEIC photo of a hot-air balloon open in Windows Photos" width="32%">
+  <img src="screenshots/photos-bird.jpg" alt="A HEIC photo of a gull over water open in Windows Photos" width="32%">
+</p>
+
 ## Install
 
 1. Download the latest `OpenHEIC-vX.Y.Z-windows-x64.zip` from [Releases](https://github.com/Devesh1312/OpenHEIC/releases) and extract it.

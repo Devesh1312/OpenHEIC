@@ -27,7 +27,7 @@ jobs:
 
       - name: Build and test
         run: |
-          cargo build --release --workspace --examples
+          cargo build --release --workspace --lib --bins --examples
           cargo test --release --workspace
 
       - name: Package

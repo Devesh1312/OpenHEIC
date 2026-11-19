@@ -4,3 +4,5 @@
 *.heic binary
 *.heif binary
 *.hif binary
+*.jpg binary
+*.png binary
