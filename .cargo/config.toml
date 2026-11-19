@@ -1,0 +1,8 @@
+[env]
+VCPKG_ROOT = { value = ".deps/vcpkg", relative = true }
+VCPKGRS_TRIPLET = "x64-windows-static"
+
+# Static CRT: heic_wic.dll is loaded into Explorer/Photos, so it must not
+# depend on the VC++ redistributable.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

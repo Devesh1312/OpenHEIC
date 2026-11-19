@@ -1,0 +1,22 @@
+[package]
+name = "heic-wic"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "OpenHEIC Windows Imaging Component (WIC) codec for HEIC/HEIF"
+publish = false
+
+[dependencies]
+heic-core = { version = "0.1.0", path = "../heic-core" }
+libheif-rs = "3.0.0"
+windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_Graphics_Imaging", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_System_LibraryLoader", "Win32_System_SystemServices", "Win32_UI_Shell"] }
+windows-core = "0.62"
+winreg = "0.56.0"
+
+[lib]
+name = "heic_wic"
+crate-type = ["cdylib", "rlib"]

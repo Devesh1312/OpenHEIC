@@ -1,0 +1,52 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache vcpkg (static libheif)
+        uses: actions/cache@v4
+        with:
+          path: .deps/vcpkg
+          key: vcpkg-${{ runner.os }}-${{ hashFiles('scripts/setup-deps.ps1') }}
+
+      - name: Build native dependencies
+        shell: pwsh
+        run: ./scripts/setup-deps.ps1
+
+      - name: Build and test
+        run: |
+          cargo build --release --workspace --examples
+          cargo test --release --workspace
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $name = "OpenHEIC-${{ github.ref_name }}-windows-x64"
+          $dir = "dist/$name"
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          Copy-Item target/release/heic-convert.exe, target/release/heic_wic.dll $dir
+          Copy-Item README.md, LICENSE-MIT, LICENSE-APACHE, THIRD_PARTY_NOTICES.md $dir
+          Copy-Item -Recurse licenses "$dir/licenses"
+          Compress-Archive -Path "$dir/*" -DestinationPath "dist/$name.zip"
+          (Get-FileHash "dist/$name.zip" -Algorithm SHA256).Hash.ToLower() + "  $name.zip" |
+            Out-File -Encoding ascii "dist/$name.zip.sha256"
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.zip
+            dist/*.sha256
+          generate_release_notes: true

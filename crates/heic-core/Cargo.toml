@@ -1,0 +1,19 @@
+[package]
+name = "heic-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "HEIC/HEIF decoding and max-quality JPEG encoding (OpenHEIC core library)"
+publish = false
+
+[dependencies]
+jpeg-encoder = { version = "0.7.1", features = ["simd"] }
+libheif-rs = "3.0.0"
+thiserror = "2.0.21"
+
+[dev-dependencies]
+image = { version = "0.25.10", default-features = false, features = ["jpeg"] }

@@ -1,0 +1,7 @@
+/target
+/.deps
+*.jpg.part
+
+# Personal / local-only files
+/sample
+/cl.bat

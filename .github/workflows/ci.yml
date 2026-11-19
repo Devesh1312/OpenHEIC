@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache vcpkg (static libheif)
+        uses: actions/cache@v4
+        with:
+          path: .deps/vcpkg
+          key: vcpkg-${{ runner.os }}-${{ hashFiles('scripts/setup-deps.ps1') }}
+
+      - name: Build native dependencies
+        shell: pwsh
+        run: ./scripts/setup-deps.ps1
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --release --workspace --examples
+
+      - name: Test
+        run: cargo test --release --workspace
+
+      - name: WIC codec in-process smoke test
+        run: target/release/examples/wic_probe.exe inproc crates/heic-core/tests/data/test.heic
