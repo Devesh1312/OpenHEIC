@@ -215,13 +215,52 @@ fn uninstall_inner() -> Result<()> {
         let _ = std::fs::remove_dir(&dir);
     }
     if dir.exists() {
-        let _ = Command::new("cmd.exe")
-            .args(["/C", &format!("ping -n 3 127.0.0.1 >nul & rmdir /S /Q \"{}\"", dir.display())])
-            .spawn();
+        let _ = schedule_dir_removal(&dir);
         println!(
-            "{} will be removed in a moment (if the DLL is still loaded by Explorer/Photos, delete it after sign-out).",
+            "{} will be removed once this window closes (if the DLL is still loaded by Explorer/Photos, it is removed after sign-out).",
             dir.display()
         );
     }
     Ok(())
+}
+
+/// Starts a hidden `cmd` that keeps trying to delete `dir` for about a minute,
+/// so it succeeds once this process (and its "Press Enter" prompt) has exited.
+fn schedule_dir_removal(dir: &Path) -> std::io::Result<std::process::Child> {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let d = dir.display();
+    // raw_arg: cmd.exe does not understand the \" escaping that .arg() would add.
+    Command::new("cmd.exe")
+        .raw_arg(format!(
+            "/D /Q /C \"for /L %i in (1,1,60) do @(if exist \"{d}\" (rmdir /S /Q \"{d}\" 2>nul & ping -n 2 127.0.0.1 >nul))\""
+        ))
+        .creation_flags(CREATE_NO_WINDOW)
+        .spawn()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn delayed_removal_handles_spaces_and_locked_files() {
+        let dir = std::env::temp_dir().join(format!("OpenHEIC removal test {}", std::process::id()));
+        std::fs::create_dir_all(dir.join("sub dir")).unwrap();
+        std::fs::write(dir.join("sub dir").join("a.txt"), b"x").unwrap();
+        // Hold a file open (like a running exe) for a moment: removal must retry.
+        let locked = {
+            use std::os::windows::fs::OpenOptionsExt;
+            std::fs::OpenOptions::new().read(true).share_mode(0).open(dir.join("sub dir").join("a.txt")).unwrap()
+        };
+        let mut child = schedule_dir_removal(&dir).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(1500));
+        drop(locked);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while dir.exists() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(200));
+        }
+        let _ = child.kill();
+        assert!(!dir.exists(), "{} was not removed", dir.display());
+    }
 }
