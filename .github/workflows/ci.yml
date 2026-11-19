@@ -38,6 +38,9 @@ jobs:
       - name: WIC codec in-process smoke test
         run: target/release/examples/wic_probe.exe inproc crates/heic-core/tests/data/test.heic
 
+      - name: Property handler in-process smoke test
+        run: target/release/examples/props_probe.exe inproc crates/heic-core/tests/data/test.heic
+
       - name: Release binaries exist and run
         shell: pwsh
         run: |

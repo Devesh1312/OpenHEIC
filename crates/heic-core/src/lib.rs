@@ -2,6 +2,7 @@
 //! `heic-convert` CLI and the `heic_wic` Windows Imaging Component codec.
 
 mod exif;
+mod photo_info;
 mod icc;
 
 use std::io::Write;
@@ -13,6 +14,7 @@ use libheif_rs::{
 };
 
 pub use exif::{exif_orientation, normalize_exif, normalize_xmp};
+pub use photo_info::{parse_exif, read_photo_info, ExifDateTime, ExifSummary, Gps, PhotoInfo};
 
 /// Default JPEG quality. 100 + 4:4:4 chroma = visually lossless.
 pub const DEFAULT_QUALITY: u8 = 100;

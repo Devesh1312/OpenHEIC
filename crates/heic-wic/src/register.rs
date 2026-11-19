@@ -12,9 +12,13 @@ use windows_core::GUID;
 use winreg::enums::{HKEY_LOCAL_MACHINE, KEY_ALL_ACCESS};
 use winreg::{RegKey, RegValue};
 
-use crate::{dll_instance, CLSID_HEIC_DECODER, GUID_VENDOR};
+use crate::{dll_instance, CLSID_HEIC_DECODER, CLSID_HEIC_PROPERTY_HANDLER, GUID_VENDOR};
 
 const FRIENDLY_NAME: &str = "OpenHEIC HEIC Decoder (libheif)";
+const PROPERTY_HANDLER_NAME: &str = "OpenHEIC HEIC Property Handler";
+const PROPERTY_HANDLERS: &str = r"SOFTWARE\Microsoft\Windows\CurrentVersion\PropertySystem\PropertyHandlers";
+/// Where we remember the handler that was registered before ours, to restore it on uninstall.
+const PREVIOUS_HANDLER: &str = "OpenHEICPrevious";
 const EXTENSIONS: [&str; 3] = [".heic", ".heif", ".hif"];
 /// Brands accepted at offset 8 after "ftyp" at offset 4.
 const BRANDS: [&[u8; 4]; 8] = [b"heic", b"heix", b"heim", b"heis", b"hevc", b"hevx", b"mif1", b"msf1"];
@@ -132,7 +136,59 @@ fn register_inner(dll: &str) -> std::io::Result<()> {
     for ext in EXTENSIONS {
         kind.set_value(ext, &"picture")?;
     }
+
+    register_property_handler(&classes, dll)
+}
+
+/// Explorer Details pane / "Date taken" / search: our IPropertyStore replaces
+/// the generic handler for HEIC (it cannot see HEIF EXIF). The previous
+/// handler is remembered and restored by `unregister`.
+fn register_property_handler(classes: &RegKey, dll: &str) -> std::io::Result<()> {
+    let ph = g(&CLSID_HEIC_PROPERTY_HANDLER);
+    let (k, _) = classes.create_subkey(format!(r"CLSID\{ph}"))?;
+    k.set_value("", &PROPERTY_HANDLER_NAME)?;
+    let (inproc, _) = k.create_subkey("InprocServer32")?;
+    inproc.set_value("", &dll)?;
+    inproc.set_value("ThreadingModel", &"Both")?;
+
+    let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
+    for ext in EXTENSIONS {
+        let (h, _) = hklm.create_subkey(format!(r"{PROPERTY_HANDLERS}\{ext}"))?;
+        let current: Option<String> = h.get_value("").ok();
+        let is_ours = current.as_deref().is_some_and(|c| c.eq_ignore_ascii_case(&ph));
+        if !is_ours {
+            if let Some(prev) = current.filter(|c| !c.is_empty()) {
+                if h.get_value::<String, _>(PREVIOUS_HANDLER).is_err() {
+                    h.set_value(PREVIOUS_HANDLER, &prev)?;
+                }
+            }
+            h.set_value("", &ph)?;
+        }
+    }
     Ok(())
+}
+
+fn unregister_property_handler(classes: &RegKey) -> std::io::Result<()> {
+    let ph = g(&CLSID_HEIC_PROPERTY_HANDLER);
+    let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
+    for ext in EXTENSIONS {
+        let path = format!(r"{PROPERTY_HANDLERS}\{ext}");
+        let Ok(h) = hklm.open_subkey_with_flags(&path, KEY_ALL_ACCESS) else { continue };
+        let current: Option<String> = h.get_value("").ok();
+        let previous: Option<String> = h.get_value(PREVIOUS_HANDLER).ok();
+        if current.as_deref().is_some_and(|c| c.eq_ignore_ascii_case(&ph)) {
+            match &previous {
+                Some(prev) => h.set_value("", prev)?,
+                None => {
+                    drop(h);
+                    ignore_missing(hklm.delete_subkey_all(&path))?;
+                    continue;
+                }
+            }
+        }
+        let _ = h.delete_value(PREVIOUS_HANDLER);
+    }
+    ignore_missing(classes.delete_subkey_all(format!(r"CLSID\{ph}")))
 }
 
 pub fn unregister() -> windows_core::Result<()> {
@@ -184,5 +240,5 @@ fn unregister_inner() -> std::io::Result<()> {
             let _ = pv.delete_value(ext);
         }
     }
-    Ok(())
+    unregister_property_handler(&classes)
 }

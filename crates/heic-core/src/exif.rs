@@ -21,21 +21,21 @@ pub(crate) fn tiff_from_heif_exif(raw: &[u8]) -> Option<Vec<u8>> {
         .map(|i| raw[i..].to_vec())
 }
 
-fn is_tiff(b: &[u8]) -> bool {
+pub(crate) fn is_tiff(b: &[u8]) -> bool {
     b.len() >= 8 && (b.starts_with(b"II*\0") || b.starts_with(b"MM\0*"))
 }
 
-struct Tiff<'a> {
-    b: &'a [u8],
-    le: bool,
+pub(crate) struct Tiff<'a> {
+    pub(crate) b: &'a [u8],
+    pub(crate) le: bool,
 }
 
 impl Tiff<'_> {
-    fn u16(&self, o: usize) -> Option<u16> {
+    pub(crate) fn u16(&self, o: usize) -> Option<u16> {
         let s = self.b.get(o..o + 2)?;
         Some(if self.le { u16::from_le_bytes([s[0], s[1]]) } else { u16::from_be_bytes([s[0], s[1]]) })
     }
-    fn u32(&self, o: usize) -> Option<u32> {
+    pub(crate) fn u32(&self, o: usize) -> Option<u32> {
         let s = self.b.get(o..o + 4)?;
         let a = [s[0], s[1], s[2], s[3]];
         Some(if self.le { u32::from_le_bytes(a) } else { u32::from_be_bytes(a) })

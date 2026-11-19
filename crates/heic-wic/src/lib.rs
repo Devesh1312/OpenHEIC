@@ -7,6 +7,7 @@
 #![allow(linker_messages)]
 
 mod decoder;
+mod props;
 mod register;
 
 use std::ffi::c_void;
@@ -21,6 +22,8 @@ use windows_core::{implement, Interface, BOOL, GUID, HRESULT, IUnknown, Ref};
 
 /// CLSID of our decoder.
 pub const CLSID_HEIC_DECODER: GUID = GUID::from_u128(0x1f6d83f1_2506_4649_9fae_261e49e54f9e);
+/// CLSID of our property handler (Explorer Details / "Date taken" / search).
+pub const CLSID_HEIC_PROPERTY_HANDLER: GUID = GUID::from_u128(0x36944290_c825_49de_9b94_ad0fe94defd2);
 /// Vendor GUID written to the registry.
 pub const GUID_VENDOR: GUID = GUID::from_u128(0xd315746a_4961_4fc4_894a_74ddf6d81ad3);
 
@@ -40,8 +43,14 @@ pub(crate) fn dll_instance() -> HINSTANCE {
     HINSTANCE(DLL_INSTANCE.load(Ordering::SeqCst) as *mut c_void)
 }
 
+#[derive(Clone, Copy)]
+enum Kind {
+    Decoder,
+    PropertyHandler,
+}
+
 #[implement(IClassFactory)]
-struct ClassFactory;
+struct ClassFactory(Kind);
 
 impl IClassFactory_Impl for ClassFactory_Impl {
     fn CreateInstance(
@@ -57,7 +66,10 @@ impl IClassFactory_Impl for ClassFactory_Impl {
         if outer.is_some() {
             return Err(CLASS_E_NOAGGREGATION.into());
         }
-        let unk: IUnknown = decoder::Decoder::new().into();
+        let unk: IUnknown = match self.0 {
+            Kind::Decoder => decoder::Decoder::new().into(),
+            Kind::PropertyHandler => props::PropertyHandler::new().into(),
+        };
         unsafe { unk.query(riid, ppv).ok() }
     }
 
@@ -82,10 +94,14 @@ pub extern "system" fn DllGetClassObject(
     }
     unsafe {
         *ppv = std::ptr::null_mut();
-        if *rclsid != CLSID_HEIC_DECODER {
+        let kind = if *rclsid == CLSID_HEIC_DECODER {
+            Kind::Decoder
+        } else if *rclsid == CLSID_HEIC_PROPERTY_HANDLER {
+            Kind::PropertyHandler
+        } else {
             return CLASS_E_CLASSNOTAVAILABLE;
-        }
-        let factory: IClassFactory = ClassFactory.into();
+        };
+        let factory: IClassFactory = ClassFactory(kind).into();
         factory.query(riid, ppv)
     }
 }

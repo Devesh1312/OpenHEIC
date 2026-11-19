@@ -62,7 +62,7 @@ fn icc_for(bytes: &[u8]) -> Option<Vec<u8>> {
     heic_core::icc_profile(&h)
 }
 
-fn read_all(stream: &IStream) -> windows_core::Result<Vec<u8>> {
+pub(crate) fn read_all(stream: &IStream) -> windows_core::Result<Vec<u8>> {
     let mut out = Vec::new();
     let mut buf = vec![0u8; 1 << 20];
     loop {
