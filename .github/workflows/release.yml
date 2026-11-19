@@ -40,8 +40,9 @@ jobs:
           Copy-Item README.md, LICENSE-MIT, LICENSE-APACHE, THIRD_PARTY_NOTICES.md $dir
           Copy-Item -Recurse licenses "$dir/licenses"
           Compress-Archive -Path "$dir/*" -DestinationPath "dist/$name.zip"
-          (Get-FileHash "dist/$name.zip" -Algorithm SHA256).Hash.ToLower() + "  $name.zip" |
-            Out-File -Encoding ascii "dist/$name.zip.sha256"
+          # LF line ending so `sha256sum -c` works on Linux/macOS too.
+          $hash = (Get-FileHash "dist/$name.zip" -Algorithm SHA256).Hash.ToLower()
+          [IO.File]::WriteAllText("$PWD/dist/$name.zip.sha256", "$hash  $name.zip`n")
 
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
